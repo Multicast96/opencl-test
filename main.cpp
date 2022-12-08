@@ -5,24 +5,42 @@
 #include <CL/opencl.hpp>
 #include <fstream>
 #include <chrono>
+#include <cstdlib>
+#include <cmath>
+#include <limits>
+#include <iomanip>
+#include <numbers>
 
 void printSystemInfo(const cl::Device &device);
 
-void computeInParallel(std::vector<int> &, std::vector<int> &, cl::Context &, cl::Program &, cl::Device &);
+void computeInParallel(std::vector<float> &, std::vector<float> &, cl::Context &, cl::Program &, cl::Device &);
 
-void computeInSequence(std::vector<int> &, const std::vector<int> &);
+void computeInSequence(std::vector<float> &, const std::vector<float> &);
 
-void checkResult(const std::vector<int> &result);
+void checkResult(const std::vector<float> &result, const std::vector<float> &, const std::vector<float> &);
 
-const int VECTOR_SIZE = 100'000'000;
-const std::string KERNEL_PROGRAM_FILE = "array_addition.cl";
+const int VECTOR_SIZE = 1'572'864;
+const std::string KERNEL_PROGRAM_FILE = "kernel.cl";
+const float SCALAR = std::numbers::pi;
+
+
+bool areSame(float a, float b) {
+    std::cout << std::fixed << std::showpoint << std::setprecision(std::numeric_limits<float>::digits);
+    return std::fabs(a - b) < 1e-2;
+}
+
+float kernel(float a, float xi, float yi) {
+    return a * xi + yi * xi;
+}
 
 int main() {
     // prepare input data
-    std::vector<int> a(VECTOR_SIZE), b(VECTOR_SIZE), result(VECTOR_SIZE);
+    srand(static_cast <unsigned> (time(0)));
+    const int MAX_VALUE = 100;
+    std::vector<float> a(VECTOR_SIZE), b(VECTOR_SIZE), result(VECTOR_SIZE);
     for (int i = 0; i < VECTOR_SIZE; i++) {
-        a[i] = i;
-        b[i] = VECTOR_SIZE - i;
+        a[i] = static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / MAX_VALUE));
+        b[i] = static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / MAX_VALUE));
     }
 
     // Search for all the OpenCL platforms available and check if there are any.
@@ -66,7 +84,7 @@ int main() {
     cl::Context context;    // The context which holds the device.
     cl::Device device = devices.front();      // The device where the kernel will run.
 
-    sources.push_back({src.c_str(), src.length()});
+    sources.emplace_back(src.c_str(), src.length());
     context = cl::Context(device);
     program = cl::Program(context, sources);
 
@@ -78,39 +96,34 @@ int main() {
         std::cout << "Kernel program " << KERNEL_PROGRAM_FILE << " build success\n";
     }
 
-    auto &vc = a;
-    cl::Buffer aBuf(context, CL_MEM_USE_HOST_PTR, sizeof(int) * VECTOR_SIZE, vc.data());
     computeInSequence(a, b);
     computeInParallel(a, b, context, program, device);
 }
 
-void computeInSequence(std::vector<int> &a, const std::vector<int> &b) {
-    std::vector<int> result(VECTOR_SIZE);
+void computeInSequence(std::vector<float> &a, const std::vector<float> &b) {
+    std::vector<float> result(VECTOR_SIZE);
     std::cout << "Compute addition of " << VECTOR_SIZE << " elements in sequence started\n";
     auto start_time = std::chrono::high_resolution_clock::now();
 
     for (auto i = 0; i < VECTOR_SIZE; i++) {
-        result[i] = a[i] + b[i];
+        result[i] = kernel(SCALAR, a[i], b[i]);
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     auto time = end_time - start_time;
-    checkResult(result);
+    checkResult(result, a, b);
     std::cout << "Task finished in " << std::chrono::duration_cast<std::chrono::milliseconds>(time).count() << " ms\n";
 }
 
-void computeInParallel(std::vector<int> &a, std::vector<int> &b, cl::Context &context, cl::Program &program,
+void computeInParallel(std::vector<float> &a, std::vector<float> &b, cl::Context &context, cl::Program &program,
                        cl::Device &device) {
-    std::vector<int> result(VECTOR_SIZE);
-    std::cout << "Compute addition of " << VECTOR_SIZE << " elements in parallel started\n";
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    // Parallely performs the operation c = a + b.
+    std::vector<float> result(VECTOR_SIZE);
+    // Parallely performs the operations.
 
     // Create buffers and allocate memory on the device.
-    cl::Buffer aBuf(context, CL_MEM_USE_HOST_PTR, sizeof(int) * VECTOR_SIZE, a.data());
-    cl::Buffer bBuf(context, CL_MEM_USE_HOST_PTR, sizeof(int) * VECTOR_SIZE, b.data());
-    cl::Buffer cBuf(context, CL_MEM_WRITE_ONLY, sizeof(int) * VECTOR_SIZE);
+    cl::Buffer aBuf(context, CL_MEM_USE_HOST_PTR, sizeof(float) * VECTOR_SIZE, a.data());
+    cl::Buffer bBuf(context, CL_MEM_USE_HOST_PTR, sizeof(float) * VECTOR_SIZE, b.data());
+    cl::Buffer cBuf(context, CL_MEM_WRITE_ONLY, sizeof(float) * VECTOR_SIZE);
 
     // create the kernel functor
     int32_t error = 0;
@@ -122,30 +135,42 @@ void computeInParallel(std::vector<int> &a, std::vector<int> &b, cl::Context &co
             std::exit(1);
         }
     }
-    kernel.setArg(0, aBuf);
-    kernel.setArg(1, bBuf);
-    kernel.setArg(2, cBuf);
+    kernel.setArg(0, SCALAR);
+    kernel.setArg(1, aBuf);
+    kernel.setArg(2, bBuf);
+    kernel.setArg(3, cBuf);
+
+    cl::Event computeEvent;
 
     // Run the kernel function and collect its result.
     cl::CommandQueue queue(context, device);
-    queue.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(VECTOR_SIZE), cl::NDRange(8));
-    queue.enqueueReadBuffer(cBuf, CL_TRUE, 0, sizeof(int) * VECTOR_SIZE, result.data());
+
+    std::cout << "Compute addition of " << VECTOR_SIZE << " elements in parallel started\n";
+    auto start_time = std::chrono::high_resolution_clock::now();
+    queue.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(VECTOR_SIZE), cl::NDRange(12), nullptr,
+                               &computeEvent);
+    computeEvent.wait();
+    auto end_time = std::chrono::high_resolution_clock::now();
+
+    queue.enqueueReadBuffer(cBuf, CL_TRUE, 0, sizeof(float) * VECTOR_SIZE, result.data());
     queue.finish();
 
-    auto end_time = std::chrono::high_resolution_clock::now();
     auto time = end_time - start_time;
+    checkResult(result, a, b);
     std::cout << "Task finished in " << std::chrono::duration_cast<std::chrono::milliseconds>(time).count() << " ms\n";
 }
 
-void checkResult(const std::vector<int> &result) {
+void checkResult(const std::vector<float> &result, const std::vector<float> &a, const std::vector<float> &b) {
     if (result.size() != VECTOR_SIZE) {
         std::cerr << "Vector size should equal " << VECTOR_SIZE << " but it's " << result.size() << std::endl;
         std::exit(1);
     }
 
-    for (const auto item: result) {
-        if (item != VECTOR_SIZE) {
-            std::cerr << "All vector items should equal " << VECTOR_SIZE << " but one is " << item << std::endl;
+    for (int i = 0; i < VECTOR_SIZE; i++) {
+        const float singleResult = kernel(SCALAR, a[i], b[i]);
+        if (!areSame(result[i], singleResult)) {
+            std::cout << "Vector item #" << i << " should equal " << singleResult << " but is " << result[i]
+                      << std::endl;
             std::exit(1);
         }
     }

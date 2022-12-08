@@ -1,8 +1,8 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.18)
 project(opencl_example)
 
 set(CMAKE_CXX_STANDARD 20)
-configure_file(array_addition.cl array_addition.cl COPYONLY)
+configure_file(kernel.cl kernel.cl COPYONLY)
 
 add_executable(opencl_example main.cpp)
 

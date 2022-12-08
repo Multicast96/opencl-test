@@ -3,7 +3,7 @@
  * through a third array.
  **/
 
- __kernel void vadd(__global int* a, __global int* b, __global int* c){
+ __kernel void vadd(float a, __global float* x, __global float* y, __global float* c){
      int index = get_global_id(0);
-     c[index] = a[index] + b[index];
+     c[index] = a * x[index] + y[index] * x[index];
  }
